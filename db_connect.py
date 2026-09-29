@@ -1,5 +1,11 @@
 import psycopg2
 import pandas as pd
+from sklearn.preprocessing import StandardScaler
+from sklearn.neighbors import NearestNeighbors
+import warnings
+
+warnings.filterwarnings('ignore')
+
 try:
     conn = psycopg2.connect(
         dbname="SaglikliOneriDB", 
@@ -9,68 +15,63 @@ try:
         port="5432"
     )
     cur = conn.cursor()
+
     cur.execute("SELECT * FROM Besinler;")
     satirlar = cur.fetchall()
-    
     sutun_isimleri = [desc[0] for desc in cur.description] 
+
     df = pd.DataFrame(satirlar, columns=sutun_isimleri)
 
     cur.close()
     conn.close()
 
-    print("--- HAM VERİDEN ÖRNEK ---")
-    print(df[['food', 'calories', 'fat']].head())
-
-    
     sayisal_sutunlar = ['grams', 'calories', 'protein', 'fat', 'sat_fat', 'fiber', 'carbs']
 
     for sutun in sayisal_sutunlar:
         df[sutun] = df[sutun].replace('t', '0')
-        
         df[sutun] = df[sutun].astype(str).str.replace(',', '')
-        
         df[sutun] = pd.to_numeric(df[sutun], errors='coerce')
 
     df.fillna(0, inplace=True)
 
-    print("\n--- TEMİZLENMİŞ VE SAYIYA ÇEVRİLMİŞ VERİ ---")
-    print(df[['food', 'calories', 'fat']].head())
-    
-    print("\nTemizlik Başarılı! Makine öğrenmesine hazırız.")
-   
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.neighbors import NearestNeighbors
+    secilen_indeks = 4 
+    secilen_besin_adi = df.iloc[secilen_indeks]['food']
+    hedef_kalori = df.iloc[secilen_indeks]['calories']
+    hedef_doymus_yag = df.iloc[secilen_indeks]['sat_fat']
+
+    print(f"Seçilen Sağlıksız Besin: {secilen_besin_adi} (Kalori: {hedef_kalori}, Doymuş Yağ: {hedef_doymus_yag})")
+
+    saglikli_df = df[(df['calories'] < hedef_kalori) & (df['sat_fat'] <= hedef_doymus_yag)].copy()
+    saglikli_df.reset_index(drop=True, inplace=True)
 
     ozellikler = ['calories', 'protein', 'fat', 'carbs']
-    X = df[ozellikler]
     scaler = StandardScaler()
-    X_olcekli = scaler.fit_transform(X)
-
-    knn_model = NearestNeighbors(n_neighbors=4, metric='euclidean')
     
-    knn_model.fit(X_olcekli)
-    print("\nModel başarıyla eğitildi!")
+    X_saglikli = scaler.fit_transform(saglikli_df[ozellikler])
 
-    secilen_indeks = 4 
-    mesafeler, komsu_indeksleri = knn_model.kneighbors([X_olcekli[secilen_indeks]])
+    knn_model = NearestNeighbors(n_neighbors=3, metric='euclidean')
+    knn_model.fit(X_saglikli)
 
-    print("\n--- ÖNERİ SİSTEMİ ÇALIŞIYOR ---")
-    print(f"Kullanıcının Seçtiği Besin: {df.iloc[secilen_indeks]['food']}")
-    print("Buna Benzer Alternatif Öneriler:")
+    hedef_degerler = scaler.transform([df.iloc[secilen_indeks][ozellikler]])
+    mesafeler, komsu_indeksleri = knn_model.kneighbors(hedef_degerler)
+
+    print("\n--- AKILLI ÖNERİ SİSTEMİ ÇALIŞIYOR ---")
+    print("Buna Benzer Daha SAĞLIKLI Alternatifler:")
     
-    for i in range(1, len(komsu_indeksleri[0])):
+    oneriler_listesi = []
+    for i in range(3):
         komsu_idx = komsu_indeksleri[0][i]
-        oneri_besin = df.iloc[komsu_idx]['food']
-        oneri_kalori = df.iloc[komsu_idx]['calories']
+        oneri_besin = saglikli_df.iloc[komsu_idx]['food']
+        oneri_kalori = saglikli_df.iloc[komsu_idx]['calories']
+        oneriler_listesi.append(oneri_besin)
         print(f"- {oneri_besin} (Kalori: {oneri_kalori})")
-   
-    secilen_besin_adi = df.iloc[secilen_indeks]['food']
-    oneriler_listesi = [df.iloc[komsu_indeksleri[0][1]]['food'], 
-                        df.iloc[komsu_indeksleri[0][2]]['food'], 
-                        df.iloc[komsu_indeksleri[0][3]]['food']]
 
     conn_insert = psycopg2.connect(
-        dbname="SaglikliOneriDB", user="postgres", password="12345", host="localhost", port="5432"
+        dbname="SaglikliOneriDB", 
+        user="postgres", 
+        password="12345", 
+        host="localhost", 
+        port="5432"
     )
     cur_insert = conn_insert.cursor()
     
@@ -85,7 +86,7 @@ try:
     
     cur_insert.close()
     conn_insert.close()
-    print("\nBAŞARI: Makine öğrenmesi sonuçları veritabanına kalıcı olarak kaydedildi!")
+    print("\nBAŞARI: Akıllı modelin sonuçları veritabanına kalıcı olarak kaydedildi!")
 
 except Exception as hata:
     print("Bir hata oluştu:", hata)
